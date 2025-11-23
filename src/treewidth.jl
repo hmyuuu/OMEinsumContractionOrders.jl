@@ -1,19 +1,41 @@
 """
-    struct Treewidth{EL <: EliminationAlgorithm, GM} <: CodeOptimizer
+    struct Treewidth{EL <: EliminationAlgorithm} <: CodeOptimizer
     Treewidth(; alg::EL = SafeRules(BT(), MMW{3}(), MF()))
 
-Tree width based solver. The solvers are implemented in [CliqueTrees.jl](https://algebraicjulia.github.io/CliqueTrees.jl/stable/) and [TreeWidthSolver.jl](https://github.com/ArrogantGao/TreeWidthSolver.jl). They include:
+Tree-width based solver for contraction-order optimization. The heavy lifting is delegated to
+[CliqueTrees.jl](https://algebraicjulia.github.io/CliqueTrees.jl/stable/) and
+[TreeWidthSolver.jl](https://github.com/ArrogantGao/TreeWidthSolver.jl). `Treewidth` plugs an
+elimination algorithm into the standard [`CodeOptimizer`](@ref) interface: it builds the line graph
+of the einsum expression, computes a tree decomposition using `alg`, and turns that decomposition
+into a contraction tree that can be evaluated by OMEinsum.
+
+The default constructor uses the safe-rule pipeline `SafeRules(BT(), MMW{3}(), MF())`, combining
+cheap heuristics with the exact Bouchitté–Todinca (`BT`) algorithm to obtain high-quality trees
+without paying the exponential cost of `BT` on every instance.
+
+# Fields
+- `alg::EL`: elimination algorithm used to produce the tree decomposition. Any elimination algorithm
+  exported by CliqueTrees.jl (e.g. `AMF`, `MF`, `MMD`, `LexBFS`, `LexM`, `BFS`, `MCS`, `RCMMD`,
+  `RCMGL`, `MCSM`, `SafeRules`, `BT`, …) can be supplied.
+
+# Related keywords
+[`optimize_treewidth`](@ref) accepts the keyword `binary`. Set it to `false` to keep the multi-way
+contraction tree delivered by the tree decomposition instead of binarizing it with an additional
+`optimize_greedy_log2size` pass. (`binary=true` is usually preferred because it produces trees that
+can be fed into BLAS-backed contractions directly.)
+
+The elimination algorithms shipped with CliqueTrees span a range of cost/quality compromises:
 
 | Algorithm | Description | Time Complexity | Space Complexity |
 |:-----------|:-------------|:----------------|:-----------------|
-| `AMF` | approximate minimum fill | O(mn) | O(m + n) |
-| `MF` | minimum fill | O(mn²) | - |
-| `MMD` | multiple minimum degree | O(mn²) | O(m + n) |
+| `AMF` | approximate minimum fill | O(m n) | O(m + n) |
+| `MF` | minimum fill | O(m n²) | - |
+| `MMD` | multiple minimum degree | O(m n²) | O(m + n) |
+| `BT` | exact Bouchitté–Todinca solver | O(|Π| m n) | exponential in the treewidth |
 
-Detailed descriptions is available in the [CliqueTrees.jl](https://algebraicjulia.github.io/CliqueTrees.jl/stable/api/#Elimination-Algorithms).
-
-# Fields
-- `alg::EL`: The algorithm to use for the treewidth calculation. Available elimination algorithms are listed above.
+where _n_ is the number of vertices in the line graph, _m_ is the number of edges and |Π| is the
+number of potential maximal cliques. See the CliqueTrees documentation for the full catalogue of
+available elimination algorithms.
 
 # Example
 ```jldoctest
@@ -48,20 +70,45 @@ Base.@kwdef struct Treewidth{EL <: EliminationAlgorithm} <: CodeOptimizer
 end
 
 """
-    const ExactTreewidth = Treewidth{SafeRules{BT, MMW{3}(), MF}}
+    const ExactTreewidth = Treewidth{SafeRules{BT, MMW{3}, MF}}
     ExactTreewidth() = Treewidth()
 
-`ExactTreewidth` is a specialization of `Treewidth` for the `SafeRules` preprocessing algorithm with the `BT` elimination algorithm.
-The `BT` algorithm is an exact solver for the treewidth problem that implemented in [`TreeWidthSolver.jl`](https://github.com/ArrogantGao/TreeWidthSolver.jl).
+`ExactTreewidth` is a convenience alias for [`Treewidth`](@ref) configured with the safe-rule
+pipeline that ends with the exact Bouchitté–Todinca (`BT`) solver from
+[`TreeWidthSolver.jl`](https://github.com/ArrogantGao/TreeWidthSolver.jl). When it finishes, the
+returned contraction tree has the minimal treewidth (and therefore the optimal time complexity)
+of the input line graph.
+
+The BT algorithm enumerates minimal separators and potential maximal cliques; its complexity is
+`O(|Π| m n)` where |Π| is the number of potential maximal cliques, so the runtime is effectively
+exponential in the treewidth of the instance. In practice `ExactTreewidth()` is ideal for networks
+with a few dozen tensors and is commonly used to validate heuristic optimizers or generate golden
+solutions for tests and benchmarks.
 """
 const ExactTreewidth = Treewidth{SafeRules{BT, MMW{3}, MF}}
 ExactTreewidth() = Treewidth()
 
 """
-    optimize_treewidth(optimizer, eincode, size_dict)
+    optimize_treewidth(optimizer::Treewidth, code::AbstractEinsum, size_dict; binary=true)
+    optimize_treewidth(optimizer::Treewidth, ixs, iy, size_dict; binary=true)
 
-Optimizing the contraction order via solve the exact tree width of the line graph corresponding to the eincode and return a `NestedEinsum` object.
-Check the docstring of `treewidth_method` for detailed explaination of other input arguments.
+Compute a contraction tree by solving (exactly or approximately, depending on `optimizer.alg`)
+the treewidth of the line graph associated with the einsum expression. The first method accepts
+any [`AbstractEinsum`](@ref) object; the second operates directly on the list of input indices `ixs`,
+the output indices `iy`, and the dictionary of index dimensions `size_dict`.
+
+# Arguments
+- `code` / (`ixs`, `iy`): representation of the einsum expression to optimize.
+- `size_dict`: dictionary that maps each index label to its dimension. Internally it is converted to
+  log₂ weights so CliqueTrees can work with weighted vertices.
+
+Both methods return a [`NestedEinsum`](@ref) that can later be evaluated or further optimized.
+
+# Keyword Arguments
+- `binary`: if `true` (default), post-process the contraction tree with
+  [`optimize_greedy_log2size`](@ref) to obtain a binary tree suitable for BLAS-backed contractions.
+  Set this to `false` to receive the raw tree implied by the decomposition, which can be useful when
+  experimenting with custom binarization strategies.
 """
 function optimize_treewidth(optimizer::Treewidth, code::AbstractEinsum, size_dict::Dict; binary::Bool=true)
     optimize_treewidth(optimizer, getixsv(code), getiyv(code), size_dict; binary)
