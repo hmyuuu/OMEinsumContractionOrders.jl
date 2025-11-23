@@ -11,6 +11,9 @@ Supported solvers include:
 | [`ExactTreewidth`](@ref Sec_ExactTreewidth) (alias of `Treewidth{RuleReduction{BT}}`) | Exact, but takes exponential time [^Bouchitté2001], based on package [`TreeWidthSolver`](https://github.com/ArrogantGao/TreeWidthSolver.jl). |
 | [`Treewidth`](@ref Sec_Treewidth) | Tree width solver based, based on package [`CliqueTrees`](https://github.com/AlgebraicJulia/CliqueTrees.jl), performance is elimination algorithm dependent. |
 
+For a quick-start checklist that distills the practical steps for the main optimizers, see the
+[Optimizer Guidelines](@ref Sec_Guidelines) page.
+
 There is a tradeoff between the time and the quality of the contraction order. The following figure shows the Pareto front of the multi-objective optimization of the time to optimize the contraction order and the time to contract the tensor network.
 
 ![](assets/tradeoff.svg)
