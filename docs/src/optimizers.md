@@ -11,6 +11,9 @@ Supported solvers include:
 | [`ExactTreewidth`](@ref Sec_ExactTreewidth) (alias of `Treewidth{RuleReduction{BT}}`) | Exact, but takes exponential time [^Bouchitté2001], based on package [`TreeWidthSolver`](https://github.com/ArrogantGao/TreeWidthSolver.jl). |
 | [`Treewidth`](@ref Sec_Treewidth) | Tree width solver based, based on package [`CliqueTrees`](https://github.com/AlgebraicJulia/CliqueTrees.jl), performance is elimination algorithm dependent. |
 
+For a quick-start checklist that distills the practical steps for the main optimizers, see the
+[Optimizer Guidelines](@ref Sec_Guidelines) page.
+
 There is a tradeoff between the time and the quality of the contraction order. The following figure shows the Pareto front of the multi-objective optimization of the time to optimize the contraction order and the time to contract the tensor network.
 
 ![](assets/tradeoff.svg)
@@ -95,14 +98,54 @@ Implemented as [`ExactTreewidth`](@ref) in the package.
 This method is supported by the [Google Summer of Code 2024](https://summerofcode.withgoogle.com) project ["Tensor network contraction order optimization and visualization"](https://summerofcode.withgoogle.com/programs/2024/projects/B8qSy9dO) released by **The Julia Language**.
 In this project, we developed [TreeWidthSolver.jl](https://github.com/ArrogantGao/TreeWidthSolver.jl), which implements the Bouchitté–Todinca algorithm[^Bouchitté2001]. It later becomes a backend of [OMEinsumContracionOrders.jl](https://github.com/TensorBFS/OMEinsumContractionOrders.jl).
 
-The Bouchitté–Todinca (BT) algorithm [^Bouchitté2001] is a method for calculating the treewidth of a graph exactly. It makes use of the theory of minimal triangulations, characterizing the minimal triangulations of a graph via objects called minimal separators and potential maximal cliques of the graph.
-The BT algorithm has a time complexity of $O(|\Pi|nm)$, which are dependent on the graph structure. (TODO: add more details of the algorithm complexity, what is it suited for?).
+`ExactTreewidth()` is a thin wrapper around [`Treewidth`](@ref) with the elimination pipeline `SafeRules(BT(), MMW{3}(), MF())`, so after a sequence of inexpensive preprocessing rules (minimum-memory work and minimum-fill heuristics) it calls the exact Bouchitté–Todinca (BT) solver provided by TreeWidthSolver.jl.
+
+The BT algorithm [^Bouchitté2001] calculates the treewidth of a graph exactly by enumerating minimal separators and potential maximal cliques of the line graph. Its runtime is $O(|\Pi| n m)$, where $|\Pi|$ is the number of potential maximal cliques, $n$ is the number of vertices and $m$ is the number of edges, so it scales exponentially with the treewidth of the instance. In practice the optimizer is reliable for tensor networks with roughly a few dozen tensors and is perfect for generating ground-truth contraction orders.
+
+Use `ExactTreewidth()` when you need
+
+- golden references for regression tests and benchmarking;
+- validation data for heuristic optimizers on small tensor networks;
+- insight into how far a heuristic result is from the optimum.
+
+```julia
+using OMEinsum, OMEinsumContractionOrders
+code = ein"ab,bc,cd,da->"
+size = uniformsize(code, 2)
+optcode = optimize_code(code, size, ExactTreewidth())
+```
 
 The blog post [Finding the Optimal Tree Decomposition with Minimal Treewidth - Xuan-Zhao Gao](https://arrogantgao.github.io/blogs/treewidth/) has a more detailed description of this method.
 
 ## [`Treewidth`](@id Sec_Treewidth)
 
-Implemented as [`Treewidth`](@ref) in the package.
+[`Treewidth`](@ref) exposes the elimination algorithms implemented in [CliqueTrees.jl](https://algebraicjulia.github.io/CliqueTrees.jl/stable/) and [TreeWidthSolver.jl](https://github.com/ArrogantGao/TreeWidthSolver.jl) through the `CodeOptimizer` interface. It constructs the line graph of the einsum expression, runs the selected elimination algorithm and converts the resulting tree decomposition back into a contraction tree.
+
+The choice of elimination algorithm allows you to trade run time for contraction quality. Typical options include:
+
+| Algorithm | Description |
+| :----------- | :------------- |
+| `AMF()` | approximate minimum fill heuristic; extremely fast and works well on sparse networks |
+| `MF()` | minimum fill; slower but often produces lower treewidth |
+| `MMD()` | multiple minimum degree; combines degree and fill information |
+| `LexBFS()` / `LexM()` | lexicographic breadth-first / multi-search heuristics that reduce bandwidth |
+| `BFS()` / `MCS()` / `RCMMD()` / `RCMGL()` / `MCSM()` | classic graph search and minimum-degree variants |
+| `SafeRules(...)` | chains multiple heuristics and can fall back to `BT` for small sub-problems |
+
+You can call [`optimize_treewidth`](@ref) directly and pass `binary=false` if you need the raw tree decomposition before it is binarized with `optimize_greedy_log2size`. The default `Treewidth()` constructor uses `SafeRules(BT(), MMW{3}(), MF())`, which gives a good balance between speed and quality for most workloads.
+
+```julia
+using OMEinsum, OMEinsumContractionOrders
+code = ein"ij,jk,kl,li->"
+size = uniformsize(code, 2)
+optimizer = Treewidth(alg=LexBFS())
+optcode = optimize_code(code, size, optimizer)
+
+# Access the raw tree decomposition if desired
+nonbinary = optimize_treewidth(optimizer, code, size; binary=false)
+```
+
+See the [CliqueTrees documentation](https://algebraicjulia.github.io/CliqueTrees.jl/stable/api/#Elimination-Algorithms) for a complete list of available elimination algorithms and their theoretical guarantees.
 
 ## Exhaustive Search (planned)
 

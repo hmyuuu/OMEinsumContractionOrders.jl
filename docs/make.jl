@@ -20,6 +20,7 @@ makedocs(;
         "Background Knowledge" => "background.md",
         "Tutorial" => "tutorial.md",
         "Choosing Optimizers" => "optimizers.md",
+        "Optimizer Guidelines" => "guidelines.md",
         "Reference" => "ref.md",
     ],
 )
